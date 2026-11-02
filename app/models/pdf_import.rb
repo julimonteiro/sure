@@ -168,7 +168,7 @@ class PdfImport < Import
         price: position.fetch("price").to_d,
         currency: "USD",
         date: date,
-        external_id: "nomad-statement-#{date}-#{ticker}",
+        external_id: "nomad-statement-#{id}-#{date}-#{ticker}",
         source: "nomad_statement",
         delete_future_holdings: false
       )
@@ -244,8 +244,9 @@ class PdfImport < Import
       elsif local[:bank_name] == "Nomad"
         summary += " A carteira detectada será registrada ao publicar numa conta de investimentos em USD."
       end
-      update!(ai_summary: summary, document_type: "bank_statement")
-      return Struct.new(:document_type, :local_statement?).new("bank_statement", true)
+      local_type = local[:document_type] || "bank_statement"
+      update!(ai_summary: summary, document_type: local_type)
+      return Struct.new(:document_type, :local_statement?).new(local_type, true)
     end
     # Honors Setting.llm_provider (issue #2113) — Provider::Anthropic implements
     # process_pdf (PR #1985).
@@ -604,6 +605,7 @@ class PdfImport < Import
     # regenerating re-judges every statement line against what the account
     # actually holds now, so the review screen offers exactly what is missing.
     def revert_derived_state!
+      account.holdings.where("external_id LIKE ?", "nomad-statement-#{id}-%").destroy_all if account&.investment?
       release_reconciliations!(account_id)
       return unless has_extracted_transactions?
 

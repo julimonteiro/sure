@@ -140,6 +140,19 @@ class Holding::MaterializerTest < ActiveSupport::TestCase
     end
   end
 
+  test "preserves statement holdings for manual investment accounts without trades" do
+    statement_holding = Holding.create!(account: @account, security: @aapl, qty: 2,
+      price: 100, amount: 200, currency: "USD", date: Date.current,
+      external_id: "nomad-statement-import-2026-09-30-AAPL")
+    Holding.create!(account: @account, security: @msft, qty: 1,
+      price: 100, amount: 100, currency: "USD", date: Date.current)
+
+    Holding::Materializer.new(@account, strategy: :forward).materialize_holdings
+
+    assert @account.holdings.exists?(statement_holding.id)
+    assert_equal 1, @account.holdings.count
+  end
+
   test "preserves provider cost_basis when trade-derived cost_basis is nil" do
     # Simulate a provider-imported holding with cost_basis (e.g., from SimpleFIN)
     # This is the realistic scenario: linked account with provider holdings but no trades

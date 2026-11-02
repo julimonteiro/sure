@@ -310,11 +310,13 @@ class Holding::Materializer
       # If there are no securities in the portfolio, only delete non-provider holdings
       if portfolio_security_ids.empty?
         Rails.logger.info("Clearing non-provider holdings (no securities from trades)")
-        account.holdings.where(account_provider_id: nil).delete_all
+        account.holdings.where(account_provider_id: nil)
+          .where("external_id IS NULL OR external_id NOT LIKE ?", "nomad-statement-%").delete_all
       else
         # Keep provider holdings and holdings for known securities within date range
         deleted_count = account.holdings
           .where(account_provider_id: nil)
+          .where("external_id IS NULL OR external_id NOT LIKE ?", "nomad-statement-%")
           .delete_by("date < ? OR security_id NOT IN (?)", account.start_date, portfolio_security_ids)
         Rails.logger.info("Purged #{deleted_count} stale holdings") if deleted_count > 0
       end

@@ -170,9 +170,12 @@ class PdfImportTest < ActiveSupport::TestCase
       2.times { @import.import_statement_positions!(adapter) }
     end
 
-    holding = account.holdings.find_by!(external_id: "nomad-statement-2026-09-30-AAPL")
+    holding = account.holdings.find_by!(external_id: "nomad-statement-#{@import.id}-2026-09-30-AAPL")
     assert_equal 2.5.to_d, holding.qty
     assert_equal 250.to_d, holding.amount
+
+    @import.send(:revert_derived_state!)
+    assert_not account.holdings.exists?(holding.id)
   end
 
   test "has_extracted_transactions? returns true with transactions" do
