@@ -1,0 +1,6 @@
+FROM ghcr.io/we-promise/sure:stable
+USER root
+RUN apt-get update -qq && apt-get install -y --no-install-recommends git
+RUN gem install bech32 -v 1.5.1 --no-document --install-dir /usr/local/bundle/ruby/3.4.0 \
+    && gem install crass -v 1.0.8 --no-document --install-dir /usr/local/bundle/ruby/3.4.0
+USER 1000:1000

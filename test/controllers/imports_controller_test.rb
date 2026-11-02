@@ -28,7 +28,28 @@ class ImportsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     assert_select "turbo-frame#modal"
-    assert_select "form[data-turbo-frame=_top] input[type=file][onchange='this.form.requestSubmit()']", count: 2
+    assert_select "form[data-turbo-frame=_top] input[type=file][onchange='this.form.requestSubmit()']", count: 3
+    assert_select "input[name='import[local_only]'][value='1']", count: 1
+  end
+
+  test "monthly PDF upload processes locally with no AI credentials" do
+    @user.family.accounts.create!(owner: @user, name: "Conta BRL", balance: 100, currency: "BRL", accountable: Depository.new)
+    Provider::Registry.expects(:preferred_llm_provider).never
+    data = { bank_name: "Santander", currency: "BRL", local_parser_version: 2,
+      period_end: "2026-10-31", opening_balance: 100.to_d, closing_balance: 105.to_d,
+      transactions: [ { date: "2026-10-01", name: "Deposit", amount: 5.to_d, external_id: "deposit-local" } ] }
+    LocalStatementParser.stubs(:parse).returns(data)
+    post imports_url, params: { import: { type: "PdfImport", local_only: "1",
+      import_file: file_fixture_upload("imports/sample_bank_statement.pdf", "application/pdf") } }
+    statement_import = PdfImport.order(:created_at).last
+    assert statement_import.local_only?
+    ProcessPdfJob.perform_now(statement_import)
+    assert statement_import.reload.pending?, statement_import.error
+    get import_url(statement_import)
+    assert_response :success
+    assert_select "input[name='import[account_id]']", count: 0
+    assert_select "select[name='import[account_id]']"
+    assert_includes response.body, I18n.t("imports.monthly.local_title")
   end
 
   # DS::Button with an href renders button_to, which POSTs unless given a

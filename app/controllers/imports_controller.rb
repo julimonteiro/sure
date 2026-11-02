@@ -181,7 +181,7 @@ class ImportsController < ApplicationController
     end
 
     def import_params
-      params.require(:import).permit(:import_file)
+      params.require(:import).permit(:import_file, :local_only)
     end
 
     def reject_guest_family_config_import!
@@ -241,6 +241,9 @@ class ImportsController < ApplicationController
       return redirect_to new_import_path, alert: t("imports.create.pdf_too_large", max_size: Import::MAX_PDF_SIZE / 1.megabyte) if file.size > Import::MAX_PDF_SIZE
 
       pdf_import = PdfImport.create_from_upload!(family: Current.family, file: file, user: Current.user)
+      if ActiveModel::Type::Boolean.new.cast(import_params[:local_only]) && pdf_import.pending? && !pdf_import.ai_processed?
+        pdf_import.update!(column_mappings: (pdf_import.column_mappings || {}).merge("local_only" => true))
+      end
       pdf_import.process_with_ai_later
       redirect_to import_path(pdf_import), notice: t("imports.create.pdf_processing")
     rescue AccountStatement::DuplicateUploadError

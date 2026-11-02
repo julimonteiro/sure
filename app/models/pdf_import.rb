@@ -107,6 +107,8 @@ class PdfImport < Import
     end
 
     transaction do
+      account.lock!
+      LocalStatementImport.new(self).validate! if local_statement?
       mappings.each(&:create_mappable!)
 
       # Rows were already filtered against existing records when they were
@@ -130,7 +132,10 @@ class PdfImport < Import
           next
         end
 
+        item = local_transaction_for(row)
         Transaction.new(
+          kind: item&.fetch("kind", "standard") || "standard",
+          extra: item.present? ? { "local_statement" => { "original_kind" => item.fetch("kind", "standard") } } : {},
           category: mappings.categories.mappable_for(row.category),
           entry: Entry.new(
             account: account,
@@ -141,6 +146,8 @@ class PdfImport < Import
             notes: row.notes,
             import: self,
             import_locked: true,
+            external_id: item&.dig("external_id"),
+            source: item.present? ? "local_statement" : nil,
             # Born reconciled: the statement being imported is the evidence.
             # Set by id rather than association so activerecord-import writes the
             # column directly on the recursive insert.
@@ -151,16 +158,28 @@ class PdfImport < Import
       end
 
       Transaction.import!(new_transactions, recursive: true) if new_transactions.any?
-      import_statement_positions!(adapter) if extracted_data&.dig("positions").present?
+      if extracted_data&.dig("positions").present? || (local_statement? && extracted_data["bank_name"] == "Nomad")
+        import_statement_positions!(adapter)
+      end
+      LocalStatementImport.new(self).apply! if local_statement?
       reconcile_entries!(reconciled_now, at: reconciled_at)
     end
   end
 
   def import_statement_positions!(adapter)
     date = Date.iso8601(extracted_data.fetch("position_date"))
+    security_ids = []
     extracted_data.fetch("positions").each do |position|
       ticker = position.fetch("ticker")
       security = Security::Resolver.new(ticker).resolve
+      security_ids << security.id
+      existing = account.holdings.find_by(security: security, currency: "USD", date: date)
+      if existing && existing.external_id.to_s.start_with?("nomad-statement-") && !existing.external_id.start_with?("nomad-statement-#{id}-")
+        unless existing.qty == position.fetch("quantity").to_d && existing.amount == position.fetch("market_value").to_d
+          raise ArgumentError, "Já existe outro extrato Nomad com posições diferentes para esta data. Reverta a importação anterior antes de substituir."
+        end
+        next
+      end
       adapter.import_holding(
         security: security,
         quantity: position.fetch("quantity").to_d,
@@ -172,6 +191,32 @@ class PdfImport < Import
         source: "nomad_statement",
         delete_future_holdings: false
       )
+    end
+    return unless local_statement?
+
+    # An absent security in a complete statement is a closed position. A zero
+    # snapshot prevents the previous month's quantity from remaining current.
+    account.holdings.where("external_id LIKE ?", "nomad-statement-%").where("date < ?", date)
+      .where.not(security_id: security_ids).select("DISTINCT ON (security_id) holdings.*")
+      .order(:security_id, date: :desc).each do |previous|
+      next if account.holdings.exists?(security_id: previous.security_id, date: date, currency: "USD")
+      adapter.import_holding(security: previous.security, quantity: 0, amount: 0, price: previous.price,
+        currency: "USD", date: date, external_id: "nomad-statement-#{id}-#{date}-#{previous.security.ticker}",
+        source: "nomad_statement", delete_future_holdings: false)
+    end
+    # Backfilling an older statement must not resurrect a position that a
+    # later complete statement already says is closed.
+    family.imports.where(type: "PdfImport", account_id: account.id, status: "complete").where.not(id: id).find_each do |later|
+      next unless later.extracted_data&.dig("bank_name") == "Nomad"
+      later_date = Date.iso8601(later.extracted_data.fetch("position_date"))
+      next unless later_date > date
+      tickers = later.extracted_data.fetch("positions").pluck("ticker")
+      Security.where(id: security_ids).where.not(ticker: tickers).each do |security|
+        next if account.holdings.exists?(security_id: security.id, date: later_date, currency: "USD")
+        adapter.import_holding(security: security, quantity: 0, amount: 0, price: 0, currency: "USD",
+          date: later_date, external_id: "nomad-statement-#{later.id}-#{later_date}-#{security.ticker}",
+          source: "nomad_statement", delete_future_holdings: false)
+      end
     end
   end
 
@@ -240,13 +285,16 @@ class PdfImport < Import
     if (local = LocalStatementParser.parse(pdf_file_content))
       summary = "Extrato #{local[:bank_name]} reconhecido localmente; revise as transações antes de publicar."
       if local[:bank_name] == "Mercado Pago"
-        summary += " Movimentos de Reserva são transferências internas; vincule as contas de destino para não contá-los como despesas."
+        summary += " Movimentos de Reserva terão contrapartidas nas contas de reserva ao publicar."
       elsif local[:bank_name] == "Nomad"
         summary += " A carteira detectada será registrada ao publicar numa conta de investimentos em USD."
       end
       local_type = local[:document_type] || "bank_statement"
       update!(ai_summary: summary, document_type: local_type)
       return Struct.new(:document_type, :local_statement?).new(local_type, true)
+    end
+    if local_only?
+      raise LocalStatementParser::UnsupportedStatementError, "Este PDF não tem um formato local suportado. Use o PDF original do Santander, Mercado Pago, Nomad ou XP; nenhum dado foi enviado para IA."
     end
     # Honors Setting.llm_provider (issue #2113) — Provider::Anthropic implements
     # process_pdf (PR #1985).
@@ -281,6 +329,7 @@ class PdfImport < Import
       update!(extracted_data: data)
       return data
     end
+    raise LocalStatementParser::UnsupportedStatementError, "Não foi possível ler este extrato localmente." if local_only?
 
     # Honors Setting.llm_provider (issue #2113) — Provider::Anthropic implements
     # extract_bank_statement (PR #1985).
@@ -339,7 +388,7 @@ class PdfImport < Import
         return
       end
 
-      currency = account&.currency || family.currency
+      currency = extracted_data&.dig("currency").presence || account&.currency || family.currency
       candidates = extracted_transactions.map.with_index(1) do |txn, index|
         Import::Row.new(
           import: self,
@@ -357,10 +406,10 @@ class PdfImport < Import
 
       reconcile_entries!(matched_entries)
 
-      mapped_rows = unmatched.map.with_index(1) do |row, index|
+      mapped_rows = unmatched.map do |row|
         {
           import_id: id,
-          source_row_number: index,
+          source_row_number: row.source_row_number,
           date: row.date,
           amount: row.amount,
           name: row.name,
@@ -439,7 +488,7 @@ class PdfImport < Import
   end
 
   def configured?
-    ai_processed? && rows_count > 0
+    ai_processed? && (rows_count > 0 || local_statement?)
   end
 
   def cleaned?
@@ -447,7 +496,8 @@ class PdfImport < Import
   end
 
   def publishable?
-    account.present? && statement_with_transactions? && cleaned? && mappings.all?(&:valid?)
+    account.present? && statement_with_transactions? && cleaned? && mappings.all?(&:valid?) &&
+      (!local_statement? || LocalStatementImport.new(self).valid_account?)
   end
 
   def cleaned_from_validation_stats?(invalid_rows_count:)
@@ -496,6 +546,20 @@ class PdfImport < Import
     base
   end
 
+  def local_only?
+    ActiveModel::Type::Boolean.new.cast(column_mappings&.dig("local_only"))
+  end
+
+  def local_statement?
+    extracted_data&.dig("local_parser_version").present?
+  end
+
+  def local_transaction_for(row)
+    return unless local_statement?
+
+    extracted_transactions[row.source_row_number - 1]
+  end
+
   private
 
     # A statement's posting date routinely differs by a day or two from the date
@@ -531,6 +595,27 @@ class PdfImport < Import
     # provider names for the same transaction rarely agree, and the adapter makes
     # the same choice for provider sync.
     def already_recorded_entry(adapter, row, claimed)
+      if (item = local_transaction_for(row))
+        if item["external_id"].present?
+          exact = account.entries.find_by(source: "local_statement", external_id: item["external_id"])
+          return exact if exact
+        end
+        # References distinguish repeated R$ 2 reserve operations. Only older
+        # imports without a reference may be reconciled by their visible fields.
+        legacy = account.entries.transactions.where.not(id: claimed).where(
+          date: row.date_iso, amount: row.signed_amount, currency: row.currency, name: row.name
+        ).where("source IS NULL OR source <> ?", "local_statement").first
+        return legacy if legacy
+        # Card payments can be added from the bank statement before the card
+        # statement arrives; recognize that exact payment on the second upload.
+        if item["kind"] == "cc_payment"
+          return account.entries.transactions.where.not(id: claimed).where(
+            date: Date.parse(row.date_iso).advance(days: -3)..Date.parse(row.date_iso).advance(days: 3),
+            amount: row.signed_amount, currency: row.currency
+          ).joins("JOIN transactions t ON t.id = entries.entryable_id").where(t: { kind: "funds_movement" }).first
+        end
+        return nil
+      end
       adapter.find_duplicate_transaction(
         date: row.date_iso,
         amount: row.signed_amount,
@@ -621,6 +706,8 @@ class PdfImport < Import
     # finishes as complete, the same way refresh_status_after_regeneration! ends
     # a fully reconciled import.
     def status_after_revert
+      return :pending if local_statement? && extracted_data["bank_name"] == "Nomad"
+
       statement_with_transactions? && rows_count > 0 ? :pending : :complete
     end
 

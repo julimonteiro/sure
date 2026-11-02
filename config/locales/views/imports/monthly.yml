@@ -1,0 +1,24 @@
+pt-BR:
+  imports:
+    monthly:
+      bcb_provider: "Banco Central do Brasil · PTAX USD/BRL (sem chave)"
+      upload_title: "Extratos e faturas mensais · sem IA"
+      upload_hint: "Santander, Mercado Pago, Nomad e XP. Envie os PDFs aos poucos e use as contas existentes."
+      local_title: "Documento lido localmente"
+      local_hint: "Os lançamentos foram conferidos com os totais disponíveis no PDF. Revise a conta e as movimentações antes de publicar. Nenhum dado foi enviado para IA."
+      period_end: "Fechamento do período"
+      closing_balance: "Saldo de fechamento no documento"
+      cash_only: "Este extrato XP informa apenas o caixa. O valor total dos investimentos não está incluído."
+      processing: "Lendo o PDF localmente e conferindo os valores. Nenhum serviço de IA é utilizado."
+en:
+  imports:
+    monthly:
+      bcb_provider: "Banco Central do Brasil · PTAX USD/BRL (no key)"
+      upload_title: "Monthly statements · no AI"
+      upload_hint: "Santander, Mercado Pago, Nomad and XP. Upload PDFs individually into your existing accounts."
+      local_title: "Document read locally"
+      local_hint: "Transactions were checked against the totals available in the PDF. Review the account and movements before publishing. No data was sent to AI."
+      period_end: "Statement closing date"
+      closing_balance: "Closing balance in the document"
+      cash_only: "This XP statement contains cash only. The investment portfolio value is not included."
+      processing: "Reading the PDF locally and checking its totals. No AI service is used."

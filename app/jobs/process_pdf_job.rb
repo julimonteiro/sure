@@ -32,16 +32,20 @@ class ProcessPdfJob < ApplicationJob
       # Find the user who created this import (first admin or any user in the family)
       user = pdf_import.family.users.find_by(role: :admin) || pdf_import.family.users.first
 
-      if user
+      if user && !pdf_import.local_statement?
         pdf_import.send_next_steps_email(user)
       end
 
       # Statements with extracted rows go to pending for user review/publish
       # Other document types are marked complete (no further action needed)
-      final_status = statement_with_transactions?(document_type) && pdf_import.rows_count > 0 ? :pending : :complete
+      requires_review = pdf_import.rows_count > 0 || (pdf_import.local_statement? && pdf_import.extracted_data["bank_name"] == "Nomad")
+      final_status = statement_with_transactions?(document_type) && requires_review ? :pending : :complete
       pdf_import.update!(status: final_status)
     rescue StandardError => e
       sanitized_error = sanitize_error_message(e)
+      DebugLogEntry.capture(category: "import", level: "error", message: sanitized_error,
+        source: "pdf_import", family: pdf_import.family, account: pdf_import.account,
+        metadata: { import_id: pdf_import.id, local_only: pdf_import.local_only?, error_class: e.class.name })
       Rails.logger.error("PDF processing failed for import #{pdf_import.id}: #{e.class.name} - #{sanitized_error}")
       begin
         pdf_import.update!(status: :failed, error: sanitized_error)

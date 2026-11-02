@@ -46,6 +46,16 @@ class TransferTest < ActiveSupport::TestCase
     assert_equal "standard", transfer.inflow_transaction.reload.kind
   end
 
+  test "unlinking a local card payment restores its kind without affecting a manual bank leg" do
+    transfer = create_pending_transfer(from: accounts(:depository), to: accounts(:credit_card))
+    transfer.inflow_transaction.entry.update!(source: "local_statement")
+    transfer.inflow_transaction.update!(extra: { "local_statement" => { "original_kind" => "cc_payment" } })
+    transfer.confirm!
+    transfer.destroy!
+    assert_equal "cc_payment", transfer.inflow_transaction.reload.kind
+    assert_equal "standard", transfer.outflow_transaction.reload.kind
+  end
+
   test "destroy! clears the idempotency key so a retried request can create a new transfer" do
     idempotency_key = SecureRandom.uuid
 

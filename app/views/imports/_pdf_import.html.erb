@@ -2,7 +2,7 @@
 
 <div class="h-full flex flex-col justify-center items-center">
   <div class="space-y-6 max-w-lg w-full">
-    <% if import.pending? && import.rows_count > 0 %>
+    <% if import.pending? && (import.rows_count > 0 || import.local_statement?) %>
       <%# Statement with rows ready for review %>
       <div class="mx-auto bg-success/10 h-8 w-8 rounded-full flex items-center justify-center">
         <%= icon "check", class: "text-success" %>
@@ -14,6 +14,20 @@
       </div>
 
       <div class="bg-container border border-primary rounded-xl p-4 space-y-4">
+        <% if import.local_statement? %>
+          <%= render DS::Alert.new(title: t("imports.monthly.local_title"), message: t("imports.monthly.local_hint"), variant: :success) %>
+          <dl class="text-sm space-y-2">
+            <% if import.extracted_data["period_end"].present? %>
+              <div class="flex justify-between gap-4"><dt class="text-secondary"><%= t("imports.monthly.period_end") %></dt><dd class="text-primary"><%= l(Date.iso8601(import.extracted_data["period_end"])) %></dd></div>
+            <% end %>
+            <% if import.extracted_data["closing_balance"].present? %>
+              <div class="flex justify-between gap-4"><dt class="text-secondary"><%= t("imports.monthly.closing_balance") %></dt><dd class="text-primary"><%= format_money(Money.new(import.extracted_data["closing_balance"].to_d, import.extracted_data["currency"])) %></dd></div>
+            <% end %>
+          </dl>
+          <% if import.extracted_data["cash_only"] %>
+            <%= render DS::Alert.new(message: t("imports.monthly.cash_only"), variant: :warning) %>
+          <% end %>
+        <% end %>
         <% if import.account_statement.present? %>
           <div class="space-y-2">
             <h2 class="font-medium text-primary"><%= t("imports.pdf_import.source_statement") %></h2>
@@ -68,6 +82,10 @@
                 statement for a synced account can no longer duplicate what sync
                 already brought in. %>
             <% accounts_scope = Current.user.accessible_accounts.alphabetically %>
+            <% if import.local_statement? %>
+              <% account_type = import.extracted_data["bank_name"].in?(["Nomad", "XP"]) ? "Investment" : (import.document_type == "credit_card_statement" ? "CreditCard" : "Depository") %>
+              <% accounts_scope = accounts_scope.where(currency: import.extracted_data["currency"], accountable_type: account_type) %>
+            <% end %>
             <% accounts_scope = accounts_scope.where(accountable_type: "Investment", currency: "USD") if import.extracted_data&.dig("positions").present? %>
             <% accounts = accounts_scope.pluck(:name, :id) %>
             <% if accounts.any? %>
@@ -116,7 +134,7 @@
 
       <div class="text-center space-y-2">
         <h1 class="font-medium text-primary text-center text-3xl"><%= t("imports.pdf_import.processing_title") %></h1>
-        <p class="text-sm text-secondary"><%= t("imports.pdf_import.processing_description") %></p>
+        <p class="text-sm text-secondary"><%= t(import.local_only? ? "imports.monthly.processing" : "imports.pdf_import.processing_description") %></p>
       </div>
 
       <div class="space-y-2 flex flex-col">
@@ -189,9 +207,9 @@
         </div>
       </div>
 
-      <div class="text-center">
+      <% unless import.local_statement? %><div class="text-center">
         <p class="text-sm text-secondary"><%= t("imports.pdf_import.email_sent_notice") %></p>
-      </div>
+      </div><% end %>
 
       <div class="space-y-2 flex flex-col">
         <%= render DS::Link.new(text: t("imports.pdf_import.view_summary"), href: summary_import_path(import), variant: "primary", full_width: true, frame: :modal) %>

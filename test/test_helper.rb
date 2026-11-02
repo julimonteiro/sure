@@ -5,9 +5,12 @@ if ENV["COVERAGE"] == "true"
   end
 end
 
+ENV["RAILS_ENV"] ||= "test"
 require_relative "../config/environment"
 
-ENV["RAILS_ENV"] ||= "test"
+unless Rails.env.test? && ActiveRecord::Base.connection_db_config.database.to_s.match?(/_test(?:_\d+)?\z/)
+  raise "Refusing to run fixtures outside an explicitly named *_test database. Set POSTGRES_TEST_DB."
+end
 
 # Set Plaid to sandbox mode for tests
 ENV["PLAID_ENV"] = "sandbox"

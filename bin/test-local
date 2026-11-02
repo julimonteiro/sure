@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+docker compose -f compose.yml -f compose.test-local.yml run --rm --no-deps \
+  -e RAILS_ENV=test -e POSTGRES_DB="${POSTGRES_TEST_DB:-sure_test}" -e POSTGRES_TEST_DB="${POSTGRES_TEST_DB:-sure_test}" \
+  -e SELF_HOSTED=false -e DISABLE_PARALLELIZATION="${DISABLE_PARALLELIZATION:-true}" \
+  web env -u OPENAI_ACCESS_TOKEN -u OPENAI_MODEL -u OPENAI_URI_BASE \
+    -u LLM_CONTEXT_WINDOW -u OPENAI_REQUEST_TIMEOUT -u AI_RESPONSE_TIMEOUT \
+    -u AI_HEALTH_PROBE_TIMEOUT -u AI_HEALTH_PROBE_CACHE_TTL \
+    -u ASSISTANT_MAX_TOOL_ITERATIONS bundle exec rails test "$@"

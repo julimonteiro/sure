@@ -1,0 +1,22 @@
+services:
+  web:
+    image: sure-local-test
+    volumes: !override
+      - ./:/rails
+      - ./test/support/empty.env:/rails/.env:ro
+    environment:
+      RAILS_ENV: test
+      POSTGRES_DB: sure_test
+      POSTGRES_TEST_DB: sure_test
+      SELF_HOSTED: "false"
+      DISABLE_PARALLELIZATION: "true"
+      REDIS_URL: redis://redis:6379/15
+      OPENAI_ACCESS_TOKEN: null
+      OPENAI_MODEL: null
+      OPENAI_URI_BASE: null
+      LLM_CONTEXT_WINDOW: null
+      OPENAI_REQUEST_TIMEOUT: null
+      AI_HEALTH_PROBE_TIMEOUT: null
+      AI_HEALTH_PROBE_CACHE_TTL: null
+      AI_RESPONSE_TIMEOUT: null
+      ASSISTANT_MAX_TOOL_ITERATIONS: null

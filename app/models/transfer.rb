@@ -248,7 +248,10 @@ class Transfer < ApplicationRecord
           # A pending auto-match never changed the kind (see #confirm!), so a
           # transfer kind on its transactions predates the match and stays.
           if transaction.transfer? && !pending?
-            transaction.update!(kind: "standard")
+            original_kind = if transaction.entry&.source == "local_statement"
+              transaction.extra.dig("local_statement", "original_kind")
+            end
+            transaction.update!(kind: Transaction.kinds.key?(original_kind) ? original_kind : "standard")
             # A kind locked by update_investment_contribution! belonged to this transfer.
             transaction.unlock_attr!(:kind) if transaction.locked?(:kind)
           end
