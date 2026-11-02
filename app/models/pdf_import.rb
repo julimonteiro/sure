@@ -102,6 +102,9 @@ class PdfImport < Import
 
   def import!
     raise "Account required for PDF import" unless account.present?
+    if extracted_data&.dig("positions").present? && !account.investment?
+      raise ArgumentError, "Selecione uma conta de investimentos em USD para as posições da Nomad."
+    end
 
     transaction do
       mappings.each(&:create_mappable!)
@@ -148,7 +151,27 @@ class PdfImport < Import
       end
 
       Transaction.import!(new_transactions, recursive: true) if new_transactions.any?
+      import_statement_positions!(adapter) if extracted_data&.dig("positions").present?
       reconcile_entries!(reconciled_now, at: reconciled_at)
+    end
+  end
+
+  def import_statement_positions!(adapter)
+    date = Date.iso8601(extracted_data.fetch("position_date"))
+    extracted_data.fetch("positions").each do |position|
+      ticker = position.fetch("ticker")
+      security = Security::Resolver.new(ticker).resolve
+      adapter.import_holding(
+        security: security,
+        quantity: position.fetch("quantity").to_d,
+        amount: position.fetch("market_value").to_d,
+        price: position.fetch("price").to_d,
+        currency: "USD",
+        date: date,
+        external_id: "nomad-statement-#{date}-#{ticker}",
+        source: "nomad_statement",
+        delete_future_holdings: false
+      )
     end
   end
 
@@ -214,6 +237,16 @@ class PdfImport < Import
   end
 
   def process_with_ai
+    if (local = LocalStatementParser.parse(pdf_file_content))
+      summary = "Extrato #{local[:bank_name]} reconhecido localmente; revise as transações antes de publicar."
+      if local[:bank_name] == "Mercado Pago"
+        summary += " Movimentos de Reserva são transferências internas; vincule as contas de destino para não contá-los como despesas."
+      elsif local[:bank_name] == "Nomad"
+        summary += " A carteira detectada será registrada ao publicar numa conta de investimentos em USD."
+      end
+      update!(ai_summary: summary, document_type: "bank_statement")
+      return Struct.new(:document_type, :local_statement?).new("bank_statement", true)
+    end
     # Honors Setting.llm_provider (issue #2113) — Provider::Anthropic implements
     # process_pdf (PR #1985).
     provider = Provider::Registry.preferred_llm_provider
@@ -241,6 +274,12 @@ class PdfImport < Import
 
   def extract_transactions
     return unless statement_with_transactions?
+
+    if (local = LocalStatementParser.parse(pdf_file_content))
+      data = local.deep_stringify_keys
+      update!(extracted_data: data)
+      return data
+    end
 
     # Honors Setting.llm_provider (issue #2113) — Provider::Anthropic implements
     # extract_bank_statement (PR #1985).
@@ -283,6 +322,9 @@ class PdfImport < Import
   end
 
   def generate_rows_from_extracted_data
+    if extracted_data&.dig("currency").present? && account.present? && extracted_data["currency"] != account.currency
+      raise ArgumentError, "A moeda da conta deve ser #{extracted_data['currency']} para este extrato."
+    end
     transaction do
       # insert_all! below bypasses ActiveRecord, so the `rows` association is
       # never populated with what it wrote. Reload before destroying, or a second

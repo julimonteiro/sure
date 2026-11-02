@@ -48,6 +48,18 @@
           </p>
         </div>
 
+        <% if import.extracted_data&.dig("positions").present? %>
+          <div class="space-y-2">
+            <h2 class="font-medium text-primary"><%= t("imports.pdf_import.nomad_positions_title", default: "Posições da carteira Nomad") %></h2>
+            <p class="text-sm text-secondary"><%= t("imports.pdf_import.nomad_positions_hint", default: "Ao publicar, estas posições serão registradas na conta de investimentos em USD selecionada abaixo.") %></p>
+            <ul class="text-sm text-secondary px-3 py-2 bg-container-inset rounded-lg">
+              <% import.extracted_data["positions"].each do |position| %>
+                <li><%= position["ticker"] %> · <%= position["quantity"] %> · USD <%= position["market_value"] %></li>
+              <% end %>
+            </ul>
+          </div>
+        <% end %>
+
         <div class="space-y-2">
           <h2 id="pdf-import-select-account" class="font-medium text-primary"><%= t("imports.pdf_import.select_account") %></h2>
           <%= styled_form_with model: import, scope: :import, url: import_path(import), method: :patch, class: "space-y-2" do |f| %>
@@ -55,7 +67,9 @@
                 existing transactions before they are ever shown, so importing a
                 statement for a synced account can no longer duplicate what sync
                 already brought in. %>
-            <% accounts = Current.user.accessible_accounts.alphabetically.pluck(:name, :id) %>
+            <% accounts_scope = Current.user.accessible_accounts.alphabetically %>
+            <% accounts_scope = accounts_scope.where(accountable_type: "Investment", currency: "USD") if import.extracted_data&.dig("positions").present? %>
+            <% accounts = accounts_scope.pluck(:name, :id) %>
             <% if accounts.any? %>
               <%= f.select :account_id, accounts,
                            { include_blank: t("imports.pdf_import.select_account_placeholder"), selected: import.account_id, label: false },

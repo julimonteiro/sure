@@ -157,6 +157,24 @@ class PdfImportTest < ActiveSupport::TestCase
     assert_equal [], @import.extracted_transactions
   end
 
+  test "Nomad positions publish once into a USD investment account" do
+    account = accounts(:investment)
+    @import.update!(account: account, extracted_data: {
+      "currency" => "USD", "position_date" => "2026-09-30",
+      "positions" => [ { "ticker" => "AAPL", "quantity" => "2.5", "price" => "100.00", "market_value" => "250.00" } ]
+    })
+    Security::Resolver.any_instance.stubs(:resolve).returns(securities(:aapl))
+    adapter = Account::ProviderImportAdapter.new(account)
+
+    assert_difference -> { account.holdings.count }, 1 do
+      2.times { @import.import_statement_positions!(adapter) }
+    end
+
+    holding = account.holdings.find_by!(external_id: "nomad-statement-2026-09-30-AAPL")
+    assert_equal 2.5.to_d, holding.qty
+    assert_equal 250.to_d, holding.amount
+  end
+
   test "has_extracted_transactions? returns true with transactions" do
     assert @import_with_rows.has_extracted_transactions?
   end

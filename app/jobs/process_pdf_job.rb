@@ -16,7 +16,7 @@ class ProcessPdfJob < ApplicationJob
     begin
       process_result = pdf_import.process_with_ai
       document_type = resolve_document_type(pdf_import, process_result)
-      upload_to_vector_store(pdf_import, document_type: document_type)
+      upload_to_vector_store(pdf_import, document_type: document_type) unless process_result.respond_to?(:local_statement?) && process_result.local_statement?
 
       # For statements with transactions (bank/credit card), extract and generate import rows
       if statement_with_transactions?(document_type)
